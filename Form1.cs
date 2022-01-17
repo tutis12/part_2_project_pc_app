@@ -10,6 +10,8 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using AForge.Video;
 using AForge.Video.DirectShow;
+using AForge.Imaging;
+using AForge.Imaging.Filters;
 using System.Runtime.InteropServices;
 using System.IO;
 
@@ -30,61 +32,31 @@ namespace capture
             mat = null;
             grids = new SortedDictionary<long, bool[,]>();
         }
-        private Bitmap Calc(Bitmap bm, int x0, int x1, int y0, int y1, int cx, int cy) {
-            cx *= 5;
-            cy *= 5;
+        private Bitmap Calc(Bitmap bm, List<int>xC, List<int>yC, int cx, int cy, out Bitmap partial) {
+            List<AForge.IntPoint> corners = new List<AForge.IntPoint>();
+            corners.Add(new AForge.IntPoint(xC[1], yC[1]));
+            corners.Add(new AForge.IntPoint(xC[3], yC[3]));
+            corners.Add(new AForge.IntPoint(xC[2], yC[2]));
+            corners.Add(new AForge.IntPoint(xC[0], yC[0]));
+            const int sz = 31;
+            AForge.Imaging.Filters.QuadrilateralTransformation filter = new AForge.Imaging.Filters.QuadrilateralTransformation(corners, (cx + 1) * sz, (cy + 1) * sz);
+            partial = filter.Apply(bm);
 
-            BitmapData srcData = bm.LockBits(
-            new Rectangle(0, 0, bm.Width, bm.Height),
-            ImageLockMode.ReadOnly,
-            PixelFormat.Format32bppArgb);
+            Rectangle cropRect = new Rectangle(sz / 2+1, sz / 2+1, cx * sz, cy * sz);
+            Bitmap target = new Bitmap(cx * 5, cy * 5);
 
-            int stride = srcData.Stride;
-
-            IntPtr Scan0 = srcData.Scan0;
-
-            long[,,] totals = new long[cx + 1, cy + 1, 3];
-
-            int width = bm.Width;
-            int height = bm.Height;
-            int szx = (x1 - x0) / cx;
-            int szy = (y1 - y0) / cy;
-            unsafe
+            using (Graphics g = Graphics.FromImage(target))
             {
-                byte* p = (byte*)(void*)Scan0;
-
-                for (int y = y0; y < y1; y++)
-                {
-                    for (int x = x0; x < x1; x++)
-                    {
-                        for (int color = 0; color < 3; color++)
-                        {
-                            int idx = (y * stride) + x * 4 + color;
-                            totals[(x - x0) / szx, (y - y0) / szy, color] += p[idx];
-                        }
-                    }
-                }
+                g.DrawImage(partial, new Rectangle(0, 0, target.Width, target.Height), cropRect, GraphicsUnit.Pixel);
             }
-            Bitmap ret = new Bitmap(cx, cy);
-            for (int i = 0; i < cx; i++)
-            {
-                for (int j = 0; j < cy; j++)
-                {
-                    long avgB = totals[i, j, 0] / (szx * szy);
-                    long avgG = totals[i, j, 1] / (szx * szy);
-                    long avgR = totals[i, j, 2] / (szx * szy);
-                    ret.SetPixel(i, j, Color.FromArgb((byte)avgR, (byte)avgG, (byte)avgB));
-                }
-            }
-            bm.UnlockBits(srcData);
-            return ret;
+            return target;
         }
         float ColDistance(Color a, Color b) {
             return Math.Abs(a.GetHue() - b.GetHue());
         }
         Color Closest(double x)
         {
-            if (x<255*0.5)
+            if (x < 110)
                 return Color.Black;
             else
                 return Color.White;
@@ -101,6 +73,7 @@ namespace capture
                         {
                             Color c = bm.GetPixel(i*5+a, j*5+b);
                             int cnt = 3 - Math.Abs(a - 2) - Math.Abs(b - 2);
+                            cnt = cnt * cnt + 2 * cnt;
                             sum += ((0.2125 * c.R) + (0.7154 * c.G) + (0.0721 * c.B)) * cnt;
                             sumcnt += cnt;
                         }
@@ -170,41 +143,149 @@ namespace capture
             grids.Add(ms, a);
             Console.WriteLine(ms);
         }
+
+        private void CalcR(Bitmap bm, ref List<int> xR, ref List<int> yR)
+        {
+            BitmapData srcData = bm.LockBits(
+            new Rectangle(0, 0, bm.Width, bm.Height),
+            ImageLockMode.ReadOnly,
+            PixelFormat.Format32bppArgb);
+
+            int stride = srcData.Stride;
+
+            IntPtr Scan0 = srcData.Scan0;
+
+
+            int width = bm.Width;
+            int height = bm.Height;
+            unsafe
+            {
+                byte* p = (byte*)(void*)Scan0;
+
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        int id = (y * stride) + x * 4;
+                        if (p[id + 2] - p[id + 1] - p[id + 0] > 50)
+                        {
+                            xR.Add(x);
+                            yR.Add(y);
+                        }
+                    }
+                }
+            }
+            bm.UnlockBits(srcData);
+        }
+        private void CalcCorners(int w, int h, ref List<int> xR, ref List<int> yR, ref List<int> xC, ref List<int> yC) {
+            foreach (bool xs in new[] { false, true }) 
+            {
+                foreach (bool ys in new[] { false, true })
+                {
+                    int cnt = 0;
+                    long xS = 0;
+                    long yS = 0;
+                    for (int i = 0; i < xR.Count; i++) 
+                    {
+                        if ((xR[i] > w / 2) == xs)
+                        {
+                            if ((yR[i] < h / 2) == ys)
+                            {
+                                cnt++;
+                                xS += xR[i];
+                                yS += yR[i];
+                            }
+                        }
+                    }
+                    if (cnt >= 25)
+                    {
+                        xS /= cnt;
+                        yS /= cnt;
+                        xC.Add((int)xS);
+                        yC.Add((int)yS);
+                    }
+                }
+            }
+        }
+        bool skip = true;
         private void VideoCaptureDevice_NewFrame(object sender, NewFrameEventArgs eventArgs)
         {
+            if (skip)
+            {
+                skip = false;
+                return;
+            }
+            skip = true;
+
             Bitmap x = (Bitmap)eventArgs.Frame.Clone();
+            //Console.WriteLine(x.Width);
+            //Console.WriteLine(x.Height);
             Bitmap xx = (Bitmap)x.Clone();
-            int x0 = 160;
-            int x1 = 160 + 650;
-            int y0 = 35;
-            int y1 = 35 + 500;
-            Bitmap y = Calc(xx, x0, x1, y0, y1, 13, 10);
-            pictureBox2.Image = ResizeBitmap(y, 325, 250);
-            Bitmap z = Simplify(y);
-            pictureBox3.Image = ResizeBitmap(z, 325, 250);
-            bool[,] C = Convert(z);
-            if (same(C, mat) == false)
+            //int x0 = 160;
+            //int x1 = 160 + 650;
+            //int y0 = 35;
+            //int y1 = 35 + 500;
+            List<int> xR = new List<int>(), yR = new List<int>();
+            CalcR(xx, ref xR, ref yR);
+
+            List<int> xC = new List<int>(), yC = new List<int>();//corner coords
+            CalcCorners(1280, 720, ref xR, ref yR, ref xC, ref yC);
+
+            if (xC.Count == 4)
             {
-                /*
-                for (int i = 0; i < C.GetLength(0); i++)
+                Bitmap bm2;
+                Bitmap y = Calc(xx, xC, yC, 21, 16, out bm2);
+                pictureBox4.Image = bm2;
+                pictureBox2.Image = ResizeBitmap(y, 325, 250);
+                Bitmap z = Simplify(y);
+                pictureBox3.Image = ResizeBitmap(z, 325, 250);
+                bool[,] C = Convert(z);
+                if (same(C, mat) == false)
                 {
-                    for (int j = 0; j < C.GetLength(1); j++)
+                    /*
+                    for (int i = 0; i < C.GetLength(0); i++)
                     {
-                        Console.Write(C[i, j]);
+                        for (int j = 0; j < C.GetLength(1); j++)
+                        {
+                            Console.Write(C[i, j]);
+                        }
+                        Console.WriteLine();
                     }
-                    Console.WriteLine();
+                    Console.WriteLine();*/
+                    AddMat(C);
+                    PrintMat(C);
+                    mat = C;
                 }
-                Console.WriteLine();*/
-                AddMat(C);
-                PrintMat(C);
-                mat = C;
             }
-            using (Graphics g = Graphics.FromImage(x))
+
+            //using (Graphics g = Graphics.FromImage(x))
+            //{
+            //    Rectangle rect = new Rectangle(x0, y0, x1 - x0, y1 - y0);
+            //    g.DrawRectangle(new Pen(Color.Red, 7), rect);
+            //}
+            for (int i = 0; i < xR.Count; i++)
             {
-                Rectangle rect = new Rectangle(x0, y0, x1 - x0, y1 - y0);
-                g.DrawRectangle(new Pen(Color.Red, 7), rect);
+                x.SetPixel(xR[i], yR[i], Color.Blue);
             }
-            pictureBox1.Image = x;
+            for (int i = 0; i < xC.Count; i++)
+            {
+                for (int dx = -20; dx <= 20; dx++)
+                    for (int dy = -20; dy <= 20; dy++)
+                        if (xC[i] + dx >= 0 && xC[i] + dx < x.Width && yC[i] + dy >= 0 && yC[i] + dy < x.Height)
+                            if (Math.Abs(dx) <= 2 || Math.Abs(dy) <= 2)
+                                x.SetPixel(xC[i] + dx, yC[i] + dy, Color.Yellow);
+            }
+            using (x)
+            {
+                var bmp2 = new Bitmap(pictureBox1.Width, pictureBox1.Height);
+                using (var g = Graphics.FromImage(bmp2))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                    g.DrawImage(x, new Rectangle(Point.Empty, bmp2.Size));
+                    pictureBox1.Image = bmp2;
+                }
+            }
+            //pictureBox1.Image = x;
         }
 
         FilterInfoCollection camCollection;
@@ -331,8 +412,8 @@ namespace capture
             if (hi == ms.Count - 1)
                 return t;
             long gal = (ms[lo] + ms[hi + 1]) / 2;
-            gal = Math.Max(gal, t - dt / 4);
-            gal = Math.Min(gal, t + dt / 4);
+            gal = Math.Max(gal, t - dt / 3);
+            gal = Math.Min(gal, t + dt / 3);
             return gal;
         }
         bool[,] Rot180(bool[,] a) {
