@@ -56,7 +56,7 @@ namespace capture
         }
         Color Closest(double x)
         {
-            if (x < 110)
+            if (x < 90)
                 return Color.Black;
             else
                 return Color.White;
@@ -231,10 +231,10 @@ namespace capture
             List<int> xC = new List<int>(), yC = new List<int>();//corner coords
             CalcCorners(1280, 720, ref xR, ref yR, ref xC, ref yC);
 
-            if (xC.Count == 4)
+            if (xC.Count == 4 && imageSet == false)
             {
                 Bitmap bm2;
-                Bitmap y = Calc(xx, xC, yC, 21, 16, out bm2);
+                Bitmap y = Calc(xx, xC, yC, (int)numericUpDown1.Value, (int)numericUpDown2.Value, out bm2);
                 pictureBox4.Image = bm2;
                 pictureBox2.Image = ResizeBitmap(y, 325, 250);
                 Bitmap z = Simplify(y);
@@ -297,7 +297,7 @@ namespace capture
 
         private void Form1_Load(object sender, EventArgs e)
         {
-            AllocConsole();
+            //AllocConsole();
             camCollection = new FilterInfoCollection(FilterCategory.VideoInputDevice);
         }
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -391,6 +391,7 @@ namespace capture
             else
                 return 1;
         }
+        bool imageSet = false;
         long FixTime(long t, long dt, List<long> ms, List<bool[,]> mat)
         {
             int lo = 0;
@@ -481,38 +482,152 @@ namespace capture
             for (int i = 1; i < B.Count; i++)
                 foreach (bool b in B[i])
                     C.Add(b);
-            int v = ToInt(B[0]);
-            v = v - (v % 8);
-            Console.WriteLine(v);
-            Console.WriteLine("YOOOO!!!");
-            foreach (bool[] i in B) {
-                foreach (bool a in i) {
-                    if (a)
-                        Console.Write("1");
-                    else
-                        Console.Write("0");
+            if (B.Count > 0)
+            {
+                int v = ToInt(B[0]);
+                Console.WriteLine(v);
+                Console.WriteLine("YOOOO!!!");
+                foreach (bool[] i in B)
+                {
+                    foreach (bool a in i)
+                    {
+                        if (a)
+                            Console.Write("1");
+                        else
+                            Console.Write("0");
+                    }
+                    Console.WriteLine();
+                    Console.WriteLine();
                 }
-                Console.WriteLine();
-                Console.WriteLine();
+                while (C.Count > v)
+                    C.RemoveAt(C.Count - 1);
+                if (isImage)
+                {
+                    imageSet = true;
+                    pictureBox2.Image = WriteImage(C);
+                }
+                else
+                    WriteFile("file.txt", C);
             }
-            while (C.Count > v)
-                C.RemoveAt(C.Count - 1);
-            WriteFile("file.txt", C);
+        }
+
+        private int DotP(int x1, int y1, int x2, int y2)
+        {
+            return x1 * x2 + y1 * y2;
+        }
+        private Bitmap WriteImage(List<bool> B)
+        {
+            int p = 0;
+            int w = 0;
+            int h = 0;
+            for (int t = 0; t < 15; t++)
+                if (B[p++])
+                    w += (1 << t);
+            for (int t = 0; t < 15; t++)
+                if (B[p++])
+                    h += (1 << t);
+            int[,,] rgb1 = new int[h, w, 3];
+            for (int x = 0; x < h; x++)
+                for (int y = 0; y < w; y++)
+                {
+                    rgb1[x, y, 0] = 128;
+                    rgb1[x, y, 1] = 128;
+                    rgb1[x, y, 2] = 128;
+                }
+            int logwh = 1;
+            {
+                int sz = 2;
+                while (sz < w * h)
+                {
+                    sz *= 2;
+                    logwh++;
+                }
+            }
+            while (p + logwh * 2 + 7 * 3 < B.Count)
+            {
+                int r1 = 0;
+                int r2 = 0;
+                for (int t = 0; t < logwh; t++)
+                    if (B[p++])
+                        r1 += (1 << t);
+                for (int t = 0; t < logwh; t++)
+                    if (B[p++])
+                        r2 += (1 << t);
+                int x1 = r1 % h;
+                int y1 = r1 / h;
+                int x2 = r2 % h;
+                int y2 = r2 / h;
+                int x3 = ((x1 + x2) + (y2 - y1)) / 2;
+                int y3 = ((y1 + y2) + (x1 - x2)) / 2;
+                int x4 = ((x1 + x2) - (y2 - y1)) / 2;
+                int y4 = ((y1 + y2) - (x1 - x2)) / 2;
+                int xmn = Math.Min(h - 1, Math.Max(0, Math.Min(Math.Min(x1, x2), Math.Min(x3, x4))));
+                int ymn = Math.Min(w - 1, Math.Max(0, Math.Min(Math.Min(y1, y2), Math.Min(y3, y4))));
+                int xmx = Math.Min(h - 1, Math.Max(0, Math.Max(Math.Max(x1, x2), Math.Max(x3, x4))));
+                int ymx = Math.Min(w - 1, Math.Max(0, Math.Max(Math.Max(y1, y2), Math.Max(y3, y4))));
+                int r = 0, g = 0, b = 0;
+                for (int t = 0; t < 7; t++)
+                    if (B[p++])
+                        r += (1 << t);
+                for (int t = 0; t < 7; t++)
+                    if (B[p++])
+                        g += (1 << t);
+                for (int t = 0; t < 7; t++)
+                    if (B[p++])
+                        b += (1 << t);
+                r -= 64;
+                g -= 64;
+                b -= 64;
+                for (int x = xmn; x <= xmx; x++)
+                {
+                    for (int y = ymn; y <= ymx; y++)
+                    {
+                        bool ok = true;
+                        if (DotP(x3 - x1, y3 - y1, x - x1, y - y1) < 0)
+                            ok = false;
+                        if (DotP(x4 - x1, y4 - y1, x - x1, y - y1) < 0)
+                            ok = false;
+                        if (DotP(x3 - x2, y3 - y2, x - x2, y - y2) < 0)
+                            ok = false;
+                        if (DotP(x4 - x2, y4 - y2, x - x2, y - y2) < 0)
+                            ok = false;
+                        if (ok)
+                        {
+                            rgb1[x, y, 0] += r;
+                            rgb1[x, y, 1] += g;
+                            rgb1[x, y, 2] += b;
+                            rgb1[x, y, 0] = Math.Min(rgb1[x, y, 0], 255);
+                            rgb1[x, y, 1] = Math.Min(rgb1[x, y, 1], 255);
+                            rgb1[x, y, 2] = Math.Min(rgb1[x, y, 2], 255);
+                            rgb1[x, y, 0] = Math.Max(rgb1[x, y, 0], 0);
+                            rgb1[x, y, 1] = Math.Max(rgb1[x, y, 1], 0);
+                            rgb1[x, y, 2] = Math.Max(rgb1[x, y, 2], 0);
+                        }
+                    }
+                }
+            }
+            Bitmap bmp = new Bitmap(w, h);
+            for (int x = 0; x < h; x++)
+                for (int y = 0; y < w; y++)
+                {
+                    int r = rgb1[x, y, 0];
+                    int g = rgb1[x, y, 1];
+                    int b = rgb1[x, y, 2];
+                    bmp.SetPixel(y, x, Color.FromArgb(r, g, b));
+                }
+            return bmp;
         }
         private void WriteFile(string name, List<bool> C) {
             List<byte> CC = new List<byte>();
-            for (int i = 0; i < C.Count; i += 8) {
+            for (int i = 0; i + 7 < C.Count; i += 8) {
                 int a = 0;
                 int x = 1;
-                for (int j = 0; j < 8 && i+j<C.Count; j++) 
+                for (int j = 0; j < 8; j++) 
                 {
                     if (C[i + j] == true)
                         a += x;
                     x *= 2;
                 }
-                a -= 128;
-                if (a < 0)
-                    a += 256;
                 CC.Add((byte)a);
             }
             Console.WriteLine(CC.Count);
@@ -548,6 +663,11 @@ namespace capture
                 videoCaptureDevice.Stop();
             }
             Calculate();
+        }
+        bool isImage = false;
+        private void checkBox1_CheckedChanged(object sender, EventArgs e)
+        {
+            isImage = checkBox1.Checked;
         }
     }
 }
